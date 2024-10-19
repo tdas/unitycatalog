@@ -27,7 +27,7 @@ version.sbt @tdas
 /ui/ @yc-shawn @jamieknight-db
 
 # AI
-/unitycatalog-ai/ @BenWilson2 @dennyglee
+/unitycatalog-ai/ @dennyglee
 
 # Spark Connector
 /spark-connector/ @tdas @cloud-fan
