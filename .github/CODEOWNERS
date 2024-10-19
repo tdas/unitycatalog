@@ -5,7 +5,7 @@
 
 # Builds and tests
 build.sbt @tdas
-version.sbt @gtdas
+version.sbt @tdas
 /build/ @tdas
 /project/ @tdas
 /.github/ @tdas
