@@ -30,7 +30,7 @@ version.sbt @tdas
 /unitycatalog-ai/ @BenWilson2 @dennyglee
 
 # Spark Connector
-/spark-connector/ @tdas @fanchen
+/spark-connector/ @tdas @cloud-fan
 
 # Docker
 Dockerfile @dennyglee
