@@ -45,9 +45,12 @@ public class UcManagedDeltaContractTest {
             .readerFeatures(staging.getRequiredProtocol().getReaderFeatures())
             .writerFeatures(staging.getRequiredProtocol().getWriterFeatures());
     Map<String, String> properties = new HashMap<>();
+    // NOTE (Iceberg-write spike): getRequiredProperties() is generated as Map<String,Object>, so a
+    // full recompile fails on `v != null ? v : "engine-supplied"` (Object into Map<String,String>).
+    // Pre-existing latent type error, unrelated to the spike; toString() unblocks the test compile.
     staging
         .getRequiredProperties()
-        .forEach((k, v) -> properties.put(k, v != null ? v : "engine-supplied"));
+        .forEach((k, v) -> properties.put(k, v != null ? v.toString() : "engine-supplied"));
     assertThatCode(() -> validate(protocol, null, properties)).doesNotThrowAnyException();
   }
 

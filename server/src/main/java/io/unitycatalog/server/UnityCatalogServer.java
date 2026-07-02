@@ -284,15 +284,15 @@ public class UnityCatalogServer {
         new JacksonRequestConverterFunction(icebergMapper);
     JacksonResponseConverterFunction icebergResponseConverter =
         new JacksonResponseConverterFunction(icebergMapper);
-    MetadataService metadataService =
-        new MetadataService(new FileIOFactory(storageCredentialVendor, serverProperties));
+    FileIOFactory fileIOFactory = new FileIOFactory(storageCredentialVendor, serverProperties);
+    MetadataService metadataService = new MetadataService(fileIOFactory);
     TableConfigService tableConfigService =
         new TableConfigService(storageCredentialVendor, serverProperties);
 
     armeriaServerBuilder.annotatedService(
         BASE_PATH + "iceberg",
         new IcebergRestCatalogService(
-            schemaService, tableConfigService, metadataService, repositories),
+            schemaService, tableConfigService, metadataService, fileIOFactory, repositories),
         icebergRequestConverter,
         icebergResponseConverter);
   }

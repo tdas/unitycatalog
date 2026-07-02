@@ -17,10 +17,14 @@ import io.unitycatalog.server.exception.IcebergRestExceptionHandler;
 import io.unitycatalog.server.model.ListSchemasResponse;
 import io.unitycatalog.server.model.ListTablesResponse;
 import io.unitycatalog.server.model.SchemaInfo;
+import io.unitycatalog.server.persist.IcebergTableCatalogRepository;
 import io.unitycatalog.server.persist.Repositories;
 import io.unitycatalog.server.persist.TableRepository;
+import io.unitycatalog.server.service.iceberg.FileIOFactory;
 import io.unitycatalog.server.service.iceberg.MetadataService;
 import io.unitycatalog.server.service.iceberg.TableConfigService;
+import io.unitycatalog.server.service.iceberg.UCIcebergCatalog;
+import io.unitycatalog.server.service.iceberg.UCTableOperations;
 import io.unitycatalog.server.utils.JsonUtils;
 import java.util.Collections;
 import java.util.List;
@@ -34,7 +38,10 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.BadRequestException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.exceptions.NoSuchViewException;
+import org.apache.iceberg.rest.CatalogHandlers;
 import org.apache.iceberg.rest.Endpoint;
+import org.apache.iceberg.rest.requests.CreateTableRequest;
+import org.apache.iceberg.rest.requests.UpdateTableRequest;
 import org.apache.iceberg.rest.responses.ConfigResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
 import org.apache.iceberg.rest.responses.ListNamespacesResponse;
@@ -56,24 +63,42 @@ public class IcebergRestCatalogService {
           Endpoint.V1_LOAD_TABLE,
           Endpoint.V1_LOAD_VIEW,
           Endpoint.V1_REPORT_METRICS,
-          Endpoint.V1_LIST_TABLES);
+          Endpoint.V1_LIST_TABLES,
+          // SPIKE: native Iceberg REST write endpoints.
+          Endpoint.V1_CREATE_TABLE,
+          Endpoint.V1_UPDATE_TABLE);
+
+  /**
+   * SPIKE: root of the local-FS warehouse used when the client does not pass an explicit table
+   * location on create. Per-catalog subdirectories are created underneath. Overridable via the
+   * {@code uc.iceberg.spike.warehouseRoot} system property.
+   */
+  private static final String WAREHOUSE_ROOT_BASE =
+      System.getProperty(
+          "uc.iceberg.spike.warehouseRoot",
+          System.getProperty("java.io.tmpdir") + "/uc-iceberg-rest-spike");
 
   private final SchemaService schemaService;
   private final TableConfigService tableConfigService;
   private final MetadataService metadataService;
   private final TableRepository tableRepository;
   private final SessionFactory sessionFactory;
+  private final IcebergTableCatalogRepository icebergRepository;
+  private final FileIOFactory fileIOFactory;
 
   public IcebergRestCatalogService(
       SchemaService schemaService,
       TableConfigService tableConfigService,
       MetadataService metadataService,
+      FileIOFactory fileIOFactory,
       Repositories repositories) {
     this.schemaService = schemaService;
     this.tableConfigService = tableConfigService;
     this.metadataService = metadataService;
     this.tableRepository = repositories.getTableRepository();
     this.sessionFactory = repositories.getSessionFactory();
+    this.fileIOFactory = fileIOFactory;
+    this.icebergRepository = new IcebergTableCatalogRepository(repositories);
   }
 
   // Config APIs
@@ -188,6 +213,61 @@ public class IcebergRestCatalogService {
     return LoadTableResponse.builder()
         .withTableMetadata(tableMetadata)
         .addAllConfig(config)
+        .build();
+  }
+
+  /**
+   * SPIKE: create a native Iceberg table. Accepts an Iceberg {@link CreateTableRequest}, drives it
+   * through {@link CatalogHandlers#createTable} (which builds the initial {@link TableMetadata},
+   * writes {@code metadata.json} via {@link UCTableOperations}, and persists the pointer), then
+   * returns a {@link LoadTableResponse} augmented with the (local-FS: empty) table config.
+   */
+  @Post("/v1/catalogs/{catalog}/namespaces/{namespace}/tables")
+  @ProducesJson
+  @AuthorizeExpression("#authorize(#principal, #metastore, OWNER)")
+  @AuthorizeResourceKey(METASTORE)
+  public LoadTableResponse createTable(
+      @Param("catalog") String catalog,
+      @Param("namespace") String namespace,
+      CreateTableRequest createTableRequest) {
+    LoadTableResponse response =
+        CatalogHandlers.createTable(
+            newIcebergCatalog(catalog), Namespace.of(namespace), createTableRequest);
+    return withConfig(response.tableMetadata());
+  }
+
+  /**
+   * SPIKE: commit an update to a native Iceberg table. Accepts an Iceberg {@link
+   * UpdateTableRequest} (a.k.a. CommitTableRequest: requirements + updates) and drives it through
+   * {@link CatalogHandlers#updateTable}, which validates the requirements against the loaded
+   * metadata and applies the updates; {@link UCTableOperations#doCommit} then writes the new {@code
+   * metadata.json} and atomically compare-and-swaps the stored pointer. A lost race surfaces as
+   * {@code CommitFailedException} -> HTTP 409.
+   */
+  @Post("/v1/catalogs/{catalog}/namespaces/{namespace}/tables/{table}")
+  @ProducesJson
+  @AuthorizeExpression("#authorize(#principal, #metastore, OWNER)")
+  @AuthorizeResourceKey(METASTORE)
+  public LoadTableResponse updateTable(
+      @Param("catalog") String catalog,
+      @Param("namespace") String namespace,
+      @Param("table") String table,
+      UpdateTableRequest commitRequest) {
+    TableIdentifier identifier = TableIdentifier.of(Namespace.of(namespace), table);
+    LoadTableResponse response =
+        CatalogHandlers.updateTable(newIcebergCatalog(catalog), identifier, commitRequest);
+    return withConfig(response.tableMetadata());
+  }
+
+  private UCIcebergCatalog newIcebergCatalog(String catalog) {
+    return new UCIcebergCatalog(
+        catalog, WAREHOUSE_ROOT_BASE + "/" + catalog, icebergRepository, fileIOFactory);
+  }
+
+  private LoadTableResponse withConfig(TableMetadata tableMetadata) {
+    return LoadTableResponse.builder()
+        .withTableMetadata(tableMetadata)
+        .addAllConfig(tableConfigService.getTableConfig(tableMetadata))
         .build();
   }
 
