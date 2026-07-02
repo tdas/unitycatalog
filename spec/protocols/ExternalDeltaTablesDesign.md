@@ -9,9 +9,10 @@
 > `uc-external-delta/prototype`) is being built to surface issues that change
 > the design. **Every design decision below is stated with its tradeoffs** —
 > the options considered, the pros/cons of each, and why the recommendation
-> wins. Recommendations and their rationale are revised in place as the
-> prototype (or review) invalidates an assumption; the **Changelog** tracks what
-> moved and why.
+> wins. The **PR execution plan** (§7) is a pre-prototype estimate and will be
+> recalibrated as the prototype reveals real code coupling and effort.
+> Recommendations and estimates are revised in place as the prototype (or
+> review) invalidates an assumption; the **Changelog** tracks what moved.
 
 ---
 
@@ -253,7 +254,62 @@ Each phase is independently shippable and testable and lands as its own PR
   external coverage today stops at create/load/snapshot-update and asserting
   `add-commit` is rejected (`SdkUpdateTableTest.java:768`).
 
-## 7. Authorization
+## 7. PR execution plan (stacking + LOC estimates)
+
+The work ships as a **git stack of self-contained PRs**, each branched from
+canonical master, each carrying its own tests, and each **flag-gated OFF** so a
+partial stack is always safe to merge. Subsequent PRs are rebased in order after
+any change to an earlier one. Branches use the `uc-external-delta/<step>`
+convention already in use; all PRs target the fork until upstream PRs are
+approved.
+
+**LOC are rough pre-prototype estimates** (production + test, excluding
+generated wire models and BUILD files). They will be recalibrated by the
+prototype — most importantly **PR4** (how much hidden managed-only coupling
+exists → D4) and **PR5** (v1 cloud scope → D5).
+
+| # | Branch (stack step) | Scope (decisions) | Depends on | Est. LOC (prod + test) | Risk |
+|---|---|---|---|---|---|
+| PR1 | `…/01-design-spec` | This design doc + `ManagedTablesSpec.md` catalog-managed-external addendum (D1, D2 normative) | master | ~0 code / ~400 doc | Low |
+| PR2 | `…/02-flag-and-state` | Feature flag (D8) + coordination-state representation (D3); default OFF, no behavior change | master | ~300–450 (200–300 + 100–150) | Low–Med |
+| PR3 | `…/03-onboard-and-load` | Onboarding transition; `loadTable` surfaces commits for coordinated external (relax `TableRepository:406/261`) | PR2 | ~300–450 (150–250 + 150–200) | Med |
+| PR4 | `…/04-commit-gate` | **Core.** Relax `requireManaged` (`DeltaCommitRepository:980`, `DeltaUpdateTableMapper:564/624`); reuse `postCommitCore`; resolve staging-URI equality (`DeltaCommitRepository:1016`) (D4) | PR3 | ~500–800 (200–350 + 300–450) | **High** |
+| PR5 | `…/05-cred-vending` | External write credential vending (D5). v1 AWS/local only ≈ low end; full Azure+GCP ≈ high end | PR2 (parallel to PR4) | AWS/local ~150–250; +Azure+GCP ~500–800 | Med |
+| PR6 | `…/06-fencing-lifecycle` | `catalogOwned` feature enforcement (D2) + onboarding `_delta_log` validation (D6) + vacuum/cleanup ownership (D9) | PR3, PR4 | ~500–750 (300–450 + 200–300) | **High** |
+| PR7 | `…/07-client-wiring` | Route external catalog-managed create/commit through the Delta API in connectors (`UCSingleCatalog:339`, `UCDeltaGenericCredentialFetcher:37`) | PR4, PR5, PR6 | ~450–900 (250–500 + 200–400) | Med–High |
+| PR8 | `…/08-test-matrix-rollout` | Parameterize Delta-API tests on table type; end-to-end coordinated-commit matrix; rollout hardening | all | ~250–450 (mostly test) | Low–Med |
+
+**Totals (PR2–PR8, excludes docs):** ≈ **2,550–4,600 LOC** (prod + test);
+production-only ≈ **1,350–2,700 LOC**. The wide bands reflect two unknowns the
+prototype will close: PR4 coupling depth and PR5 cloud scope.
+
+**Stacking DAG** (mostly linear; PR5 is the one parallel track):
+
+```
+PR1  design + spec           (independent; mergeable any time)
+
+master
+ └─ PR2  flag + state (D3,D8)
+      ├─ PR3  onboarding + load-surfaces-commits
+      │     └─ PR4  commit gate (D4)            [core, high risk]
+      │           └─ PR6  fencing + onboarding validation + lifecycle (D2,D6,D9)
+      │                 └─ PR7  client wiring
+      │                       └─ PR8  test matrix + rollout
+      └─ PR5  external write credential vending (D5)  ──feeds──▶ PR7
+```
+
+**Notes.**
+- PR1 is docs-only and can merge independently of the code stack.
+- PR5 (credential vending) is largely orthogonal to the commit gate and can be
+  developed in parallel off PR2; the feature flag keeps it inert until PR7 wires
+  it. Everything else is a linear stack.
+- The **prototype** on `uc-external-delta/prototype` is a throwaway spike that
+  validates the PR2–PR4 shape and calibrates these estimates. It is **not** one
+  of the shippable stack PRs.
+- Do not modify auto-generated BUILD files; keep each PR self-contained with
+  tests; rebase the rest of the stack in order after any change.
+
+## 8. Authorization
 
 External create proves authorization, not exclusivity
 (`AuthorizeExpressions.java:65`, `TemporaryPathCredentialsService.java:101`).
@@ -263,24 +319,24 @@ the model simple and consistent, but is coarser than a dedicated
 "onboard-to-coordination" privilege; a dedicated privilege is more precise but
 adds surface. Recommendation: reuse for v1. Exact call pending prototype.
 
-## 8. Risks
+## 9. Risks
 
 - **Split-brain (top):** non-conformant writer mutates `_delta_log` post-onboarding
   → DB log diverges. Mitigated (not eliminated) by D1/D2 + documented contract.
 - **Cross-cloud commit-file atomicity** for arbitrary external paths.
 - **Credential blast radius** for external write.
 - **Hidden managed-only coupling** beyond the four known gates — what the
-  prototype is hunting (feeds D4).
+  prototype is hunting (feeds D4 and the PR4 estimate).
 
-## 9. Open questions
+## 10. Open questions
 
 1. Is one-way onboarding (D7-A) acceptable, or must external tables stay dual-writable?
 2. v1 cloud scope — AWS/local first (D5-C)?
 3. Endpoints (D10) — trim `/config` now, implement later?
 4. State representation (D3) — property vs. column?
-5. Onboarding privilege (§7) — reuse external-location write privilege?
+5. Onboarding privilege (§8) — reuse external-location write privilege?
 
-## 10. Testing strategy
+## 11. Testing strategy
 
 SDK-level end-to-end tests mirroring `SdkUpdateTableTest`, parameterized on table
 type: onboarding, normal (+1), conflict (`<= last` → `COMMIT_VERSION_CONFLICT`;
@@ -288,7 +344,7 @@ gap → `INVALID_ARGUMENT`), backfill, per-cloud credentials; two-writer race on
 the `FOR UPDATE` lock; negative test for an incompatible pre-existing
 `_delta_log` at onboarding.
 
-## 11. Rollout
+## 12. Rollout
 
 Feature-flagged (D8-A), off by default; AWS/local first (D5-C); promote per
 cloud as vending lands; no change to existing managed or external-snapshot
@@ -296,17 +352,19 @@ behavior when off.
 
 ---
 
-## 12. Prototype Findings (living — updated from `uc-external-delta/prototype`)
+## 13. Prototype Findings (living — updated from `uc-external-delta/prototype`)
 
 > Each entry: what we tried, what happened, file:line evidence, and the design
 > decision (D#) it moves.
 
 _(Pending first prototype run.)_
 
-## 13. Changelog
+## 14. Changelog
 
+- 2026-07-02: Added **§7 PR execution plan** — stacked-PR breakdown (PR1–PR8),
+  dependency DAG, and pre-prototype LOC estimates (prod + test); renumbered
+  later sections.
 - 2026-07-02: Added **Design Decisions & Tradeoffs** (§5, D1–D10): every decision
-  now carries options + pros/cons + recommendation + status. Reworked the phases
-  to reference the decisions. Prototype not yet reported.
+  now carries options + pros/cons + recommendation + status.
 - 2026-07-02: Initial draft from investigation (claude_code + codex read-only
   explores).
