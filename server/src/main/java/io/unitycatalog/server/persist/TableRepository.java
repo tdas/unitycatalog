@@ -403,9 +403,17 @@ public class TableRepository {
     DeltaLoadTableResponse response = new DeltaLoadTableResponse();
     response.setMetadata(metadata);
 
-    // Commits (managed Delta tables only)
-    if (TableType.MANAGED.toString().equals(dao.getType())
-        && DataSourceFormat.DELTA.toString().equals(dao.getDataSourceFormat())) {
+    // Commits: MANAGED Delta tables always; EXTERNAL Delta tables when they have been onboarded to
+    // catalog-managed commit coordination (PROTOTYPE) and the server flag is on. Without this,
+    // loadTable would omit the UC-coordinated commits for an onboarded external table and the
+    // client would never learn the latest catalog-tracked version.
+    boolean isDelta = DataSourceFormat.DELTA.toString().equals(dao.getDataSourceFormat());
+    boolean isManaged = TableType.MANAGED.toString().equals(dao.getType());
+    boolean isCoordinatedExternal =
+        TableType.EXTERNAL.toString().equals(dao.getType())
+            && serverProperties.isExternalDeltaCommitCoordinationEnabled()
+            && "true".equals(props.get(TableProperties.EXTERNAL_COMMIT_COORDINATION_ENABLED));
+    if (isDelta && (isManaged || isCoordinatedExternal)) {
       populateCommitsForDelta(
           response, repositories.getDeltaCommitRepository(), session, dao.getId());
     }

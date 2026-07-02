@@ -200,6 +200,11 @@ public class ServerProperties {
     MANAGED_TABLE_ENABLED("server.managed-table.enabled", "true", BOOLEAN_VALIDATOR),
     MANAGED_TABLE_USE_DELTA_API_ONLY(
         "server.managed-table.use-delta-api-only", "false", BOOLEAN_VALIDATOR),
+    // [PROTOTYPE] Enables catalog-managed commit coordination (CCv2 add-commit /
+    // set-latest-backfilled-version) for EXTERNAL Delta tables that have been onboarded. Default
+    // OFF: no behavior change for EXTERNAL tables unless explicitly enabled.
+    EXTERNAL_DELTA_COMMIT_COORDINATION_ENABLED(
+        "server.external-delta.commit-coordination.enabled", "false", BOOLEAN_VALIDATOR),
     UNIFORM_ICEBERG_V2_ALLOW_MISSING_DV(
         "server.managed-table.uniform-iceberg-v2.allow-missing-dv", "false", BOOLEAN_VALIDATOR),
     // `storage-root.*` are replaced by managed storage locations of catalog and schema.
@@ -477,6 +482,25 @@ public class ServerProperties {
               + "=true. Use the Delta endpoint "
               + deltaEndpoint
               + " instead.");
+    }
+  }
+
+  /**
+   * [PROTOTYPE] Whether catalog-managed commit coordination is enabled for EXTERNAL Delta tables.
+   * Deliberately independent of {@link #checkManagedTableEnabled()}: an operator may run an
+   * external-coordination-only deployment with MANAGED tables disabled, or vice versa.
+   */
+  public boolean isExternalDeltaCommitCoordinationEnabled() {
+    return isTrueOrEnable(get(Property.EXTERNAL_DELTA_COMMIT_COORDINATION_ENABLED));
+  }
+
+  /** [PROTOTYPE] Throwing variant of {@link #isExternalDeltaCommitCoordinationEnabled()}. */
+  public void checkExternalDeltaCommitCoordinationEnabled() {
+    if (!isExternalDeltaCommitCoordinationEnabled()) {
+      throw new BaseException(
+          ErrorCode.INVALID_ARGUMENT,
+          "Catalog-managed commit coordination for EXTERNAL Delta tables is disabled. To enable "
+              + "it, set 'server.external-delta.commit-coordination.enabled=true'.");
     }
   }
 

@@ -418,7 +418,17 @@ public class DeltaCommitRepository {
       throw new BaseException(
           ErrorCode.INVALID_ARGUMENT, "Uniform metadata requires an accompanying commit.");
     }
-    serverProperties.checkManagedTableEnabled();
+    // [PROTOTYPE] Gate by table type. MANAGED stays behind the managed-table flag (unchanged);
+    // EXTERNAL is gated by the independent external commit-coordination flag. The onboarding-marker
+    // check lives upstream in DeltaUpdateTableMapper#requireCommitCoordinatable, which sees the
+    // post-apply property map (this same-transaction flush of set-properties has not happened yet,
+    // so a DB read here would miss an onboard-in-the-same-request marker). This layer only enforces
+    // the feature flag.
+    if (TableType.EXTERNAL.toString().equals(dao.getType())) {
+      serverProperties.checkExternalDeltaCommitCoordinationEnabled();
+    } else {
+      serverProperties.checkManagedTableEnabled();
+    }
     uniformFields.ifPresent(
         uf ->
             DeltaUniformUtils.requireMetadataLocationSubpath(

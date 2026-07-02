@@ -74,6 +74,16 @@ public final class DeltaConsts {
     /** UC-namespace rule-based property binding a Delta table to its UC-allocated UUID. */
     public static final String UC_TABLE_ID = "io.unitycatalog.tableId";
 
+    /**
+     * [PROTOTYPE] UC-namespace marker property flagging that an EXTERNAL Delta table has been
+     * onboarded to catalog-managed commit coordination (CCv2 add-commit). Chosen as a reserved
+     * table property for the spike because it needs no schema migration and rides both the existing
+     * {@code uc_properties} store and the Delta {@code set-properties} update action. Value "true"
+     * means onboarded; absent/any-other value means not onboarded.
+     */
+    public static final String EXTERNAL_COMMIT_COORDINATION_ENABLED =
+        "io.unitycatalog.externalCommitCoordination";
+
     /** Last metadata-changing commit version. */
     public static final String LAST_UPDATE_VERSION = "delta.lastUpdateVersion";
 

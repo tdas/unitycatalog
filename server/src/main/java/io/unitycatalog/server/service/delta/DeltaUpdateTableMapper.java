@@ -386,7 +386,8 @@ public final class DeltaUpdateTableMapper {
               properties,
               c.addCommit,
               c.setLatestBackfilledVersion,
-              c.hasManagedTableMetadataChange()));
+              c.hasManagedTableMetadataChange(),
+              serverProperties));
     }
     return Optional.empty();
   }
@@ -566,8 +567,9 @@ public final class DeltaUpdateTableMapper {
       MutablePropertyMap properties,
       Optional<DeltaAddCommitUpdate> addCommitOpt,
       Optional<DeltaSetLatestBackfilledVersionUpdate> backfillOpt,
-      boolean hasManagedTableMetadataChange) {
-    requireManaged(dao);
+      boolean hasManagedTableMetadataChange,
+      ServerProperties serverProperties) {
+    requireCommitCoordinatable(dao, properties, serverProperties);
     Optional<DeltaUniformUtils.UniformIcebergFields> uniformFields = Optional.empty();
     Optional<DeltaCommit> commitOpt = Optional.empty();
     if (addCommitOpt.isPresent()) {
@@ -618,14 +620,38 @@ public final class DeltaUpdateTableMapper {
   }
 
   /**
-   * Reject non-MANAGED tables at the commit/backfill entry. DELTA format is guaranteed by the
-   * caller's prior {@code requireDeltaTable}, so we only check the type here.
+   * [PROTOTYPE] Gate the commit/backfill entry to tables UC is allowed to coordinate. DELTA format
+   * is guaranteed by the caller's prior {@code requireDeltaTable}, so only the type/onboarding is
+   * checked here:
+   *
+   * <ul>
+   *   <li>MANAGED -- always eligible (unchanged production behavior).
+   *   <li>EXTERNAL -- eligible only when the server flag {@code
+   *       server.external-delta.commit-coordination.enabled} is on AND the table carries the
+   *       onboarding marker property {@link TableProperties#EXTERNAL_COMMIT_COORDINATION_ENABLED} =
+   *       "true".
+   * </ul>
+   *
+   * <p>The onboarding check reads the <b>post-apply</b> property map ({@link
+   * MutablePropertyMap#asMap()}), so onboarding and the first commit can ride in a single request
+   * (set-properties + add-commit). For a separate onboarding request the marker has already been
+   * persisted and reloaded by {@code MutablePropertyMap.load}.
    */
-  private static void requireManaged(TableInfoDAO dao) {
-    if (!TableType.MANAGED.toString().equals(dao.getType())) {
-      throw new BaseException(
-          ErrorCode.INVALID_ARGUMENT,
-          "add-commit and set-latest-backfilled-version require a MANAGED Delta table.");
+  private static void requireCommitCoordinatable(
+      TableInfoDAO dao, MutablePropertyMap properties, ServerProperties serverProperties) {
+    if (TableType.MANAGED.toString().equals(dao.getType())) {
+      return;
     }
+    if (TableType.EXTERNAL.toString().equals(dao.getType())
+        && serverProperties.isExternalDeltaCommitCoordinationEnabled()
+        && "true"
+            .equals(
+                properties.asMap().get(TableProperties.EXTERNAL_COMMIT_COORDINATION_ENABLED))) {
+      return;
+    }
+    throw new BaseException(
+        ErrorCode.INVALID_ARGUMENT,
+        "add-commit and set-latest-backfilled-version require a MANAGED Delta table, or an "
+            + "EXTERNAL Delta table onboarded to catalog-managed commit coordination.");
   }
 }
