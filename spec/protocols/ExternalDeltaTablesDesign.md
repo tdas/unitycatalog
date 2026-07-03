@@ -139,20 +139,24 @@ Coupling to `MANAGED_TABLE_ENABLED` (`checkManagedTableEnabled()` at
 flag added in the prototype. Consider per-cloud gating since storage semantics (esp.
 conditional-put, D12/D14) vary.
 
-### D9 — Maintenance policy for coordinated external tables → **CONTRADICTION to resolve**
-Earlier recommendation was "client owns vacuum." **Review (codex catch, claude_code
-concedes):** `ManagedTablesSpec.md:111` is **normative and forbids** VACUUM/OPTIMIZE/
-REORG and *"all other maintenance operations,"* with *"no per-table policy or API for
-the catalog to grant more."* So "client owns vacuum" is **forbidden by the spec this
-feature extends**. Options: **(A)** amend the spec to permit defined client-side
-maintenance for *external* coordinated tables (external = user owns the bytes);
-**(B)** external inherits the no-maintenance restriction (needs a log-growth story:
-who compacts/checkpoints?); **(C)** UC-driven maintenance (needs server write creds +
-delete authority over user data — heavy). **Plus the required fix:** `deleteTable`
-purges `uc_delta_commits` only for MANAGED (`TableRepository.java:879-888`) → external
-orphan-purge (don't delete the user's directory; fresh-UUID create means no
-inheritance except under explicit UUID reuse). **Recommendation:** A (amend spec for
-external), pending your call. **Status:** Open (spec change) + purge fix required.
+### D9 — Maintenance policy for coordinated external tables → **DECIDED: A (client self-manages)**
+**User decision (2026-07-03):** external coordinated tables **always** permit
+client-side maintenance (VACUUM/OPTIMIZE/REORG/etc.). Rationale: external means the
+**user owns the bytes and self-manages the table** — UC coordinates commits but does
+**not** manage the data, so the managed-table no-maintenance rule does not apply.
+**Spec amendment required:** `ManagedTablesSpec.md:111` (normative — forbids
+VACUUM/OPTIMIZE/REORG + *"all other maintenance operations,"* *"no per-table policy
+or API for the catalog to grant more"*) gets an **explicit carve-out for external
+coordinated tables** (a category exception, not a per-table grant). Options B (inherit
+no-maintenance) and C (UC-driven maintenance) are **rejected**.
+**Protocol interaction (confirm in PR design/review):** client maintenance still emits
+`_delta_log` commits, so they must flow through the coordination path (or be
+reconciled) so they don't register as a foreign published file and trip D13 divergence
+detection; the fence (D12) and per-commit rules are unchanged.
+**Required fix (unchanged):** `deleteTable` purges `uc_delta_commits` only for MANAGED
+(`TableRepository.java:879-888`) → add external orphan-purge (never delete the user's
+directory; fresh-UUID create means no inheritance except under explicit UUID reuse).
+**Status:** Decided (A) — spec carve-out + purge fix required.
 
 ### D10 — Advertised-but-unimplemented endpoints → **A** (defer + trim `/config`)
 `/config` advertises 12 (`DeltaApiService.java:60-73`); `DeltaApiService` implements 8;
@@ -272,16 +276,15 @@ ownership/OWNER), not reuse of `CREATE_TABLE`.
   detection) + D15 (log I/O) exist — the earlier "mitigated" framing undersold this. The
   prototype has none of them yet.
 - **TOCTOU at onboarding** (D12); **foreign coordinator adoption** (D6); **partial-
-  onboarding wedge** (D7); **maintenance-policy contradiction** (D9); **cross-cloud
+  onboarding wedge** (D7); **external maintenance = client self-managed** (D9, decided); **cross-cloud
   conditional-write availability** (D12/D14); **credential blast radius** (D5/D15).
 
 ## 10. Open questions
 
 1. **D14** — server- vs client-driven fence write? (leaning client for v1)
-2. **D9** — amend the maintenance spec for external, or inherit no-maintenance?
-3. **D13** — HEAD+periodic vs per-commit physical checks in v1?
-4. **D5/D15** — how do we obtain server-side read creds per cloud?
-5. One-way onboarding acceptable given the repair path (D7)?
+2. **D13** — HEAD+periodic vs per-commit physical checks in v1?
+3. **D5/D15** — how do we obtain server-side read creds per cloud?
+4. One-way onboarding acceptable given the repair path (D7)?
 
 ## 11. Testing strategy
 
@@ -310,6 +313,10 @@ new physical-log decisions D12–D15.
 
 ## 14. Changelog
 
+- 2026-07-03: **D9 resolved (user):** external coordinated tables always permit
+  client-side maintenance — the user self-manages the table; UC coordinates commits
+  but does not manage the data. Amend `ManagedTablesSpec.md:111` with an external
+  carve-out. D14 is now the only open decision blocking PR4.
 - 2026-07-02: **Two-vendor review + debate folded in.** Fixed `catalogOwned`→
   `catalogManaged`; reworked D1(→B′)/D2/D6/D9/D11; added D12 (atomic onboarding),
   D13 (divergence detection), D14 (fence-write actor, OPEN), D15 (`DeltaLogAccessor`+
@@ -341,5 +348,7 @@ client-driven for v1; needs an explicit decision.
 
 **Verdict:** Direction **sound**; correctness core now **specified**. **PRs 1–3
 (spec, state, read-only log accessor) are ready to build now.** The commit gate (PR6)
-must follow the fence (PR4) + divergence detection. Resolve D14 (and D9's spec change)
-before PR4.
+must follow the fence (PR4) + divergence detection. **D9 resolved (2026-07-03):
+external tables always allow client-side maintenance — the user self-manages the
+table, so the managed no-maintenance rule does not apply (spec carve-out at `:111`).**
+Resolve D14 before PR4.
